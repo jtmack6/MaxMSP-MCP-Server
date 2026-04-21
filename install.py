@@ -35,6 +35,9 @@ def load_json(file_path: Path):
         return json.load(f)
 
 
+OPENWEBUI_ENV_KEYS = ("OPENWEBUI_URL", "OPENWEBUI_API_KEY", "OPENWEBUI_MAX_COLLECTION_ID")
+
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -55,13 +58,19 @@ def main():
 
     mcp_name = "servers" if args.client == "vscode" else "mcpServers"
 
+    env = {
+        "PATH": os.path.join(current_dir, ".venv/bin"),
+        "VIRTUAL_ENV": os.path.join(current_dir, ".venv"),
+    }
+    for key in OPENWEBUI_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+
     config_data[mcp_name]["MaxMSPMCP"] = {
         "command": "mcp",
         "args": ["run", os.path.join(current_dir, "server.py")],
-        "env": {
-            "PATH": os.path.join(current_dir, ".venv/bin"),
-            "VIRTUAL_ENV": os.path.join(current_dir, ".venv"),
-        },
+        "env": env,
     }
 
     with open(config_path, "w") as f:

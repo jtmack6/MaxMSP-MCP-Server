@@ -3,6 +3,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from contextlib import asynccontextmanager
 import asyncio
 import socketio
+import aiohttp
 
 from typing import Callable, Any
 import logging
@@ -14,6 +15,10 @@ SOCKETIO_SERVER_URL = os.environ.get("SOCKETIO_SERVER_URL", "http://127.0.0.1")
 SOCKETIO_SERVER_PORT = os.environ.get("SOCKETIO_SERVER_PORT", "5002")
 NAMESPACE = os.environ.get("NAMESPACE", "/mcp")
 SOCKETIO_TIMEOUT = float(os.environ.get("SOCKETIO_TIMEOUT", "2.0"))
+
+OPENWEBUI_URL = os.environ.get("OPENWEBUI_URL", "").rstrip("/")
+OPENWEBUI_API_KEY = os.environ.get("OPENWEBUI_API_KEY", "")
+OPENWEBUI_MAX_COLLECTION_ID = os.environ.get("OPENWEBUI_MAX_COLLECTION_ID", "")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 docs_path = os.path.join(current_dir, "docs.json")
@@ -466,6 +471,53 @@ async def get_avoid_rect_position(ctx: Context):
     response = await maxmsp.send_request(payload)
 
     return response
+
+
+if OPENWEBUI_URL and OPENWEBUI_API_KEY and OPENWEBUI_MAX_COLLECTION_ID:
+
+    @mcp.tool()
+    async def query_max_docs(ctx: Context, query: str, k: int = 5) -> list:
+        """Search the Max 9 User Reference knowledge base for documentation relevant to a query.
+
+        Use this when you need authoritative information about Max/MSP objects, messages,
+        attributes, tutorials, or concepts beyond what get_object_doc provides. Returns the
+        top-k most relevant manual excerpts with their source filenames and similarity scores.
+
+        Args:
+            query (str): Natural-language search query (e.g. "how do I use the matrix~ object for audio routing").
+            k (int): Number of chunks to return (default 5).
+
+        Returns:
+            list: Items of the form {"source": str, "score": float, "text": str}, sorted by score descending.
+        """
+        url = f"{OPENWEBUI_URL}/api/v1/retrieval/query/collection"
+        payload = {
+            "collection_names": [OPENWEBUI_MAX_COLLECTION_ID],
+            "query": query,
+            "k": k,
+        }
+        headers = {
+            "Authorization": f"Bearer {OPENWEBUI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    return [{"error": f"HTTP {resp.status}: {body[:500]}"}]
+                data = await resp.json()
+
+        docs = (data.get("documents") or [[]])[0]
+        metas = (data.get("metadatas") or [[]])[0]
+        results = []
+        for text, meta in zip(docs, metas):
+            results.append({
+                "source": (meta or {}).get("source", ""),
+                "score": (meta or {}).get("score"),
+                "text": text,
+            })
+        return results
 
 
 if __name__ == "__main__":

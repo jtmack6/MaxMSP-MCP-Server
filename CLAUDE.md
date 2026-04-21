@@ -43,10 +43,11 @@ The system has three layers connected via Socket.IO:
 
 ### MCP Tools
 
-Three categories:
+Four categories:
 - **Action tools**: `add_max_object`, `remove_max_object`, `connect_max_objects`, `disconnect_max_objects`, `set_object_attribute`, `set_message_text`, `send_bang_to_object`, `send_messages_to_object`, `set_number` — send commands, no return value
 - **Query tools**: `get_objects_in_patch`, `get_objects_in_selected`, `get_object_attributes`, `get_avoid_rect_position`, `list_all_objects`, `get_object_doc` — return patch state or documentation
 - **Target tools**: `set_target_to_front_patcher`, `set_target_to_agent_patcher`, `get_target_patcher_info` — switch which patcher subsequent operations act on
+- **RAG tool** (optional): `query_max_docs` — semantic search over an Open WebUI knowledge base for the Max 9 User Reference. Only registered when `OPENWEBUI_URL`, `OPENWEBUI_API_KEY`, and `OPENWEBUI_MAX_COLLECTION_ID` env vars are all set. Calls `POST /api/v1/retrieval/query/collection` and returns top-k chunks with source filenames and similarity scores.
 
 ### Patcher Targeting
 
