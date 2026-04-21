@@ -446,6 +446,22 @@ async def set_target_to_agent_patcher(ctx: Context):
 
 
 @mcp.tool()
+async def set_target_patcher_by_name(ctx: Context, name: str):
+    """Retarget all subsequent patch operations to an open patcher, identified by its
+    filename (without extension).
+
+    Max's `max.frontpatcher` is only valid when Max itself has OS focus, which makes
+    `set_target_to_front_patcher` unreliable from an external MCP client. Saving the
+    target patcher to disk and passing its filename here is the robust alternative.
+
+    Args:
+        name (str): Patcher filename without extension (e.g. for "mywork.maxpat" pass "mywork").
+    """
+    maxmsp = ctx.request_context.lifespan_context.get("maxmsp")
+    await maxmsp.send_command({"action": "set_target_by_name", "name": name})
+
+
+@mcp.tool()
 async def get_target_patcher_info(ctx: Context):
     """Return info about the currently targeted patcher (title, filepath, whether it is the agent patch).
 

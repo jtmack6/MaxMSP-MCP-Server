@@ -141,6 +141,13 @@ function anything() {
         case "set_target_to_agent":
             set_target_to_agent();
             break;
+        case "set_target_by_name":
+            if (data.name) {
+                set_target_by_name(data.name);
+            } else {
+                outlet(0, "error", "Missing name for set_target_by_name");
+            }
+            break;
         case "get_target_info":
             if (data.request_id) {
                 get_target_info(data.request_id);
@@ -168,8 +175,23 @@ function set_target_to_agent() {
     post("Target patcher reset to agent\n");
 }
 
+function set_target_by_name(name) {
+    var pat = max.getpatcher(name);
+    if (!pat) {
+        post("No patcher found with name: " + name + "\n");
+        return;
+    }
+    target_override = pat;
+    post("Target patcher set by name: " + name + "\n");
+}
+
 function get_target_info(request_id) {
-    var info = patcher_info(get_target());
+    var info = {
+        target: patcher_info(get_target()),
+        frontpatcher: patcher_info(max.frontpatcher),
+        agent: patcher_info(agent_patcher),
+        target_override_is_null: target_override === null
+    };
     var results = {"request_id": request_id, "results": info};
     outlet(1, "response", JSON.stringify(results, null, 0));
 }

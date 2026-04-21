@@ -68,7 +68,7 @@ def main():
             env[key] = value
 
     config_data[mcp_name]["MaxMSPMCP"] = {
-        "command": "mcp",
+        "command": os.path.join(current_dir, ".venv/bin/mcp"),
         "args": ["run", os.path.join(current_dir, "server.py")],
         "env": env,
     }
