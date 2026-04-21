@@ -9,7 +9,7 @@ const NAMESPACE = "/mcp";
 
 // Create Socket.IO server
 var io = new Server(PORT, {
-  cors: { origin: "*" }
+  cors: { origin: ["http://127.0.0.1", "http://localhost"] }
 });
 
 Max.outlet("port", `Server listening on port ${PORT}`);
@@ -38,7 +38,7 @@ Max.addHandler("port", async (msg) => {
   }
   await io.close();
   io = new Server(PORT, {
-    cors: { origin: "*" }
+    cors: { origin: ["http://127.0.0.1", "http://localhost"] }
   });
   // await Max.post(`Socket.IO MCP server listening on port ${PORT}`);
   await Max.outlet("port", `Server listening on port ${PORT}`);
@@ -63,7 +63,7 @@ io.of(NAMESPACE).on("connection", (socket) => {
     }
     await io.close();
     io = new Server(PORT, {
-      cors: { origin: "*" }
+      cors: { origin: ["http://127.0.0.1", "http://localhost"] }
     });
     // await Max.post(`Socket.IO MCP server listening on port ${PORT}`);
     await Max.outlet("port", `Server listening on port ${PORT}`);

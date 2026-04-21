@@ -3,10 +3,24 @@ autowatch = 1; // 1
 inlets = 1; // Receive network messages here
 outlets = 3; // For status, responses, etc.
 
-var p = this.patcher
+var agent_patcher = this.patcher;
+var target_override = null;  // when set, takes precedence over agent_patcher
 var obj_count = 0;
 var boxes = [];
 var lines = [];
+
+function get_target() {
+    return target_override || agent_patcher;
+}
+
+function patcher_info(pat) {
+    if (!pat) return null;
+    return {
+        title: pat.wind ? pat.wind.title : "",
+        filepath: pat.filepath || "",
+        is_agent: pat === agent_patcher
+    };
+}
 
 function safe_parse_json(str) {
     try {
@@ -121,9 +135,43 @@ function anything() {
                 set_number(data.varname, data.num);
             }
             break;
+        case "set_target_to_front":
+            set_target_to_front();
+            break;
+        case "set_target_to_agent":
+            set_target_to_agent();
+            break;
+        case "get_target_info":
+            if (data.request_id) {
+                get_target_info(data.request_id);
+            } else {
+                outlet(0, "error", "Missing request_id for get_target_info");
+            }
+            break;
         default:
             outlet(0, "error", "Unknown action: " + data.action);
     }
+}
+
+function set_target_to_front() {
+    var fp = max.frontpatcher;
+    if (!fp) {
+        post("No front patcher found\n");
+        return;
+    }
+    target_override = fp;
+    post("Target patcher set to front: " + (fp.wind ? fp.wind.title : "") + "\n");
+}
+
+function set_target_to_agent() {
+    target_override = null;
+    post("Target patcher reset to agent\n");
+}
+
+function get_target_info(request_id) {
+    var info = patcher_info(get_target());
+    var results = {"request_id": request_id, "results": info};
+    outlet(1, "response", JSON.stringify(results, null, 0));
 }
 
 // function fetch_test(request_id) {
@@ -132,6 +180,7 @@ function anything() {
 // }
 
 function add_object(x, y, type, args, var_name) {
+    var p = get_target();
     var new_obj = p.newdefault(x, y, type, args);
     new_obj.varname = var_name;
     if (type == "message" || type == "comment" || type == "flonum") {
@@ -140,6 +189,7 @@ function add_object(x, y, type, args, var_name) {
 }
 
 function remove_object(var_name) {
+    var p = get_target();
 	var obj = p.getnamed(var_name);
     if (obj) {
 	    p.remove(obj);
@@ -147,18 +197,25 @@ function remove_object(var_name) {
 }
 
 function connect_objects(src_varname, outlet_idx, dst_varname, inlet_idx) {
+    var p = get_target();
     var src = p.getnamed(src_varname);
     var dst = p.getnamed(dst_varname);
+    if (!src) { post("Object not found: " + src_varname + "\n"); return; }
+    if (!dst) { post("Object not found: " + dst_varname + "\n"); return; }
     p.connect(src, outlet_idx, dst, inlet_idx);
 }
 
 function disconnect_objects(src_varname, outlet_idx, dst_varname, inlet_idx) {
+    var p = get_target();
 	var src = p.getnamed(src_varname);
     var dst = p.getnamed(dst_varname);
+    if (!src) { post("Object not found: " + src_varname + "\n"); return; }
+    if (!dst) { post("Object not found: " + dst_varname + "\n"); return; }
 	p.disconnect(src, outlet_idx, dst, inlet_idx);
 }
 
 function set_object_attribute(varname, attr_name, attr_value) {
+    var p = get_target();
     var obj = p.getnamed(varname);
     if (obj) {
         if (obj.maxclass == "message" || obj.maxclass == "comment") {
@@ -180,6 +237,7 @@ function set_object_attribute(varname, attr_name, attr_value) {
 }
 
 function set_message_text(varname, new_text) {
+    var p = get_target();
     var obj = p.getnamed(varname);
     if (obj) {
         if (obj.maxclass == "message") {
@@ -193,6 +251,7 @@ function set_message_text(varname, new_text) {
 }
 
 function send_message_to_object(varname, message) {
+    var p = get_target();
     var obj = p.getnamed(varname);
     if (obj) {
         obj.message(message);
@@ -202,6 +261,7 @@ function send_message_to_object(varname, message) {
 }
 
 function send_bang_to_object(varname) {
+    var p = get_target();
     var obj = p.getnamed(varname);
     if (obj) {
         obj.message("bang");
@@ -211,6 +271,7 @@ function send_bang_to_object(varname) {
 }
 
 function set_text_in_comment(varname, text) {
+    var p = get_target();
     var obj = p.getnamed(varname);
     if (obj) {
         if (obj.maxclass == "comment") {
@@ -224,6 +285,7 @@ function set_text_in_comment(varname, text) {
 }
 
 function set_number(varname, num) {
+    var p = get_target();
     var obj = p.getnamed(varname);
     if (obj) {
         obj.message("set", num);
@@ -236,8 +298,8 @@ function set_number(varname, num) {
 // fetch request:
 
 function get_objects_in_patch(request_id) {
-    
-	var p = this.patcher
+
+	var p = get_target();
     obj_count = 0;
     boxes = [];
     lines = [];
@@ -256,8 +318,8 @@ function get_objects_in_patch(request_id) {
 }
 
 function get_objects_in_selected(request_id) {
-    
-	var p = this.patcher
+
+	var p = get_target();
     obj_count = 0;
     boxes = [];
     lines = [];
@@ -317,8 +379,8 @@ function collect_objects(obj) {
 }
 
 function get_object_attributes(request_id, var_name) {
-    
-	var p = this.patcher
+
+	var p = get_target();
     var obj = p.getnamed(var_name);
     if (!obj) {
         post("Object not found: " + var_name);
@@ -351,7 +413,7 @@ function get_window_rect() {
 }
 
 function get_avoid_rect_position(request_id) {
-    var p = this.patcher;
+    var p = get_target();
     var l, t, r, b;
     p.applyif(
         function (obj) {

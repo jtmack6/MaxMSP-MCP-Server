@@ -13,6 +13,7 @@ import json
 SOCKETIO_SERVER_URL = os.environ.get("SOCKETIO_SERVER_URL", "http://127.0.0.1")
 SOCKETIO_SERVER_PORT = os.environ.get("SOCKETIO_SERVER_PORT", "5002")
 NAMESPACE = os.environ.get("NAMESPACE", "/mcp")
+SOCKETIO_TIMEOUT = float(os.environ.get("SOCKETIO_TIMEOUT", "2.0"))
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 docs_path = os.path.join(current_dir, "docs.json")
@@ -24,6 +25,7 @@ for obj_list in docs.values():
         flattened_docs[obj["name"]] = obj
 
 io_server_started = False
+_maxmsp_connection = None
 
 
 class MaxMSPConnection:
@@ -33,7 +35,12 @@ class MaxMSPConnection:
         self.server_port = server_port
         self.namespace = namespace
 
-        self.sio = socketio.AsyncClient()
+        self.sio = socketio.AsyncClient(
+            reconnection=True,
+            reconnection_attempts=10,
+            reconnection_delay=1,
+            reconnection_delay_max=30,
+        )
         self._pending = {}  # fetch requests that are not yet completed
 
         @self.sio.on("response", namespace=self.namespace)
@@ -48,10 +55,10 @@ class MaxMSPConnection:
         await self.sio.emit("command", cmd, namespace=self.namespace)
         logging.info(f"Sent to MaxMSP: {cmd}")
 
-    async def send_request(self, payload: dict, timeout=2.0):
+    async def send_request(self, payload: dict, timeout=SOCKETIO_TIMEOUT):
         """Send a fetch request to MaxMSP."""
         request_id = str(uuid.uuid4())
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
 
         payload.update({"request_id": request_id})
@@ -84,32 +91,30 @@ class MaxMSPConnection:
 @asynccontextmanager
 async def server_lifespan(server: FastMCP):
     """Manage server lifespan"""
-    global io_server_started
+    global io_server_started, _maxmsp_connection
     if not io_server_started:
+        maxmsp = MaxMSPConnection(
+            SOCKETIO_SERVER_URL, SOCKETIO_SERVER_PORT, NAMESPACE
+        )
         try:
-            maxmsp = MaxMSPConnection(
-                SOCKETIO_SERVER_URL, SOCKETIO_SERVER_PORT, NAMESPACE
-            )
-            try:
-                # Start the Socket.IO server
-                await maxmsp.start_server()
-                io_server_started = True
-                logging.info(f"Listening on {maxmsp.server_url}:{maxmsp.server_port}")
-
-                # Yield the Socket.IO connection to make it available in the lifespan context
-                yield {"maxmsp": maxmsp}
-            except Exception as e:
-                logging.error(f"lifespan error starting server: {e}")
-                await maxmsp.sio.disconnect()
-                raise
-
+            await maxmsp.start_server()
+            io_server_started = True
+            _maxmsp_connection = maxmsp
+            logging.info(f"Listening on {maxmsp.server_url}:{maxmsp.server_port}")
+            yield {"maxmsp": maxmsp}
+        except Exception as e:
+            logging.error(f"lifespan error starting server: {e}")
+            raise
         finally:
             logging.info("Shutting down connection")
+            io_server_started = False
+            _maxmsp_connection = None
             await maxmsp.sio.disconnect()
     else:
         logging.info(
-            f"IO server already running on {maxmsp.server_url}:{maxmsp.server_port}"
+            f"IO server already running on {_maxmsp_connection.server_url}:{_maxmsp_connection.server_port}"
         )
+        yield {"maxmsp": _maxmsp_connection}
 
 
 # Create the MCP server with lifespan support
@@ -411,6 +416,40 @@ async def get_object_attributes(ctx: Context, varname: str):
     response = await maxmsp.send_request(payload)
 
     return [response]
+
+
+@mcp.tool()
+async def set_target_to_front_patcher(ctx: Context):
+    """Retarget all subsequent patch operations to Max's current front (focused) patcher.
+
+    Use this when the user wants the agent to work on a patch other than the one
+    containing the agent UI. Bring the desired patcher to the front in Max, then
+    call this tool. The target stays locked to that patcher until changed.
+    """
+    maxmsp = ctx.request_context.lifespan_context.get("maxmsp")
+    await maxmsp.send_command({"action": "set_target_to_front"})
+
+
+@mcp.tool()
+async def set_target_to_agent_patcher(ctx: Context):
+    """Reset the target patcher back to the one containing the agent UI.
+
+    Use this to return to the default behavior after working on an external patch.
+    """
+    maxmsp = ctx.request_context.lifespan_context.get("maxmsp")
+    await maxmsp.send_command({"action": "set_target_to_agent"})
+
+
+@mcp.tool()
+async def get_target_patcher_info(ctx: Context):
+    """Return info about the currently targeted patcher (title, filepath, whether it is the agent patch).
+
+    Use this to confirm which patcher the agent is currently acting on.
+    """
+    maxmsp = ctx.request_context.lifespan_context.get("maxmsp")
+    payload = {"action": "get_target_info"}
+    response = await maxmsp.send_request(payload)
+    return response
 
 
 @mcp.tool()
