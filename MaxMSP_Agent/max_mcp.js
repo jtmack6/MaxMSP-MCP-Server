@@ -5,6 +5,7 @@ outlets = 3; // For status, responses, etc.
 
 var agent_patcher = this.patcher;
 var target_override = null;  // when set, takes precedence over agent_patcher
+var target_watcher_task = null;
 var obj_count = 0;
 var boxes = [];
 var lines = [];
@@ -148,6 +149,12 @@ function anything() {
                 outlet(0, "error", "Missing name for set_target_by_name");
             }
             break;
+        case "watch_for_target":
+            start_target_watcher(data.timeout_sec || 15);
+            break;
+        case "stop_target_watcher":
+            stop_target_watcher();
+            break;
         case "get_target_info":
             if (data.request_id) {
                 get_target_info(data.request_id);
@@ -176,13 +183,46 @@ function set_target_to_agent() {
 }
 
 function set_target_by_name(name) {
-    var pat = max.getpatcher(name);
+    var pat = max.getpatcher ? max.getpatcher(name) : null;
     if (!pat) {
-        post("No patcher found with name: " + name + "\n");
+        post("set_target_by_name unsupported in this JS engine - use watch_for_target\n");
         return;
     }
     target_override = pat;
     post("Target patcher set by name: " + name + "\n");
+}
+
+function start_target_watcher(timeout_sec) {
+    stop_target_watcher();
+    var total = (timeout_sec || 15) * 10;
+    var attempts = 0;
+    target_watcher_task = new Task(function () {
+        attempts += 1;
+        var fp = max.frontpatcher;
+        if (fp && fp !== agent_patcher) {
+            var title = fp.wind ? fp.wind.title : "";
+            if (title !== "Max Console") {
+                target_override = fp;
+                post("Target captured: " + title + "\n");
+                stop_target_watcher();
+                return;
+            }
+        }
+        if (attempts >= total) {
+            post("Target watcher timed out\n");
+            stop_target_watcher();
+        }
+    }, this);
+    target_watcher_task.interval = 100;
+    target_watcher_task.repeat(total);
+    post("Target watcher started - bring target patcher to front in Max within " + (timeout_sec || 15) + "s\n");
+}
+
+function stop_target_watcher() {
+    if (target_watcher_task) {
+        target_watcher_task.cancel();
+        target_watcher_task = null;
+    }
 }
 
 function get_target_info(request_id) {
@@ -190,7 +230,10 @@ function get_target_info(request_id) {
         target: patcher_info(get_target()),
         frontpatcher: patcher_info(max.frontpatcher),
         agent: patcher_info(agent_patcher),
-        target_override_is_null: target_override === null
+        target_override_is_null: target_override === null,
+        typeof_max_getpatcher: typeof max.getpatcher,
+        typeof_max_frontpatcher: typeof max.frontpatcher,
+        max_keys: Object.keys(max).slice(0, 40)
     };
     var results = {"request_id": request_id, "results": info};
     outlet(1, "response", JSON.stringify(results, null, 0));

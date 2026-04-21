@@ -11,6 +11,12 @@ import uuid
 import os
 import json
 
+try:
+    import anthropic
+    _HAS_ANTHROPIC = True
+except ImportError:
+    _HAS_ANTHROPIC = False
+
 SOCKETIO_SERVER_URL = os.environ.get("SOCKETIO_SERVER_URL", "http://127.0.0.1")
 SOCKETIO_SERVER_PORT = os.environ.get("SOCKETIO_SERVER_PORT", "5002")
 NAMESPACE = os.environ.get("NAMESPACE", "/mcp")
@@ -19,6 +25,10 @@ SOCKETIO_TIMEOUT = float(os.environ.get("SOCKETIO_TIMEOUT", "2.0"))
 OPENWEBUI_URL = os.environ.get("OPENWEBUI_URL", "").rstrip("/")
 OPENWEBUI_API_KEY = os.environ.get("OPENWEBUI_API_KEY", "")
 OPENWEBUI_MAX_COLLECTION_ID = os.environ.get("OPENWEBUI_MAX_COLLECTION_ID", "")
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-opus-4-7")
+AGENT_MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "12"))
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 docs_path = os.path.join(current_dir, "docs.json")
@@ -54,6 +64,20 @@ class MaxMSPConnection:
             fut = self._pending.get(req_id)
             if fut and not fut.done():
                 fut.set_result(data.get("results"))
+
+        @self.sio.on("prompt", namespace=self.namespace)
+        async def _on_prompt(data):
+            text = (data or {}).get("text", "").strip()
+            if not text:
+                return
+            if not (_HAS_ANTHROPIC and ANTHROPIC_API_KEY):
+                await self.sio.emit(
+                    "agent_status",
+                    {"status": "error", "message": "ANTHROPIC_API_KEY not set or anthropic package missing"},
+                    namespace=self.namespace,
+                )
+                return
+            asyncio.create_task(run_agent_loop(self, text))
 
     async def send_command(self, cmd: dict):
         """Send a command to MaxMSP."""
@@ -446,6 +470,28 @@ async def set_target_to_agent_patcher(ctx: Context):
 
 
 @mcp.tool()
+async def watch_for_target_patcher(ctx: Context, timeout_sec: int = 15):
+    """Start a polling task inside Max that captures the user's chosen target patcher.
+
+    Max's `max.frontpatcher` only returns a valid reference while Max itself has OS focus,
+    so we can't read it from an external MCP call. This tool starts a Task inside Max that
+    checks max.frontpatcher every 100ms for `timeout_sec` seconds. When the user brings any
+    patcher other than the agent or Max Console to the front in Max, it gets captured as the
+    target for all subsequent patch operations.
+
+    Typical workflow:
+      1. Call this tool.
+      2. Switch to Max and click anywhere in the patcher you want to work on.
+      3. Capture is immediate; you can then switch back and continue in the MCP client.
+
+    Args:
+        timeout_sec (int): How long to wait for a click before giving up (default 15).
+    """
+    maxmsp = ctx.request_context.lifespan_context.get("maxmsp")
+    await maxmsp.send_command({"action": "watch_for_target", "timeout_sec": timeout_sec})
+
+
+@mcp.tool()
 async def set_target_patcher_by_name(ctx: Context, name: str):
     """Retarget all subsequent patch operations to an open patcher, identified by its
     filename (without extension).
@@ -534,6 +580,148 @@ if OPENWEBUI_URL and OPENWEBUI_API_KEY and OPENWEBUI_MAX_COLLECTION_ID:
                 "text": text,
             })
         return results
+
+
+AGENT_SYSTEM_PROMPT = """You are a creative collaborator helping the user build Max/MSP patches in real-time from inside Max itself.
+
+Tools available:
+- query_max_docs: semantic search over the Max 9 User Reference (use this before non-trivial choices)
+- get_object_doc / list_all_objects: exact object reference pages
+- get_objects_in_patch / get_object_attributes: read current patch state
+- add_max_object / remove_max_object / connect_max_objects / disconnect_max_objects
+- set_object_attribute / set_message_text / send_messages_to_object / send_bang_to_object / set_number
+- watch_for_target_patcher / set_target_patcher_by_name / get_target_patcher_info
+
+Conventions:
+- Before choosing objects, call query_max_docs to see how the manual recommends doing what was asked.
+- Use semantic varnames: osc1/osc2/..., lfo1/..., gain, out, filter1, env1, rev/del/dist. UI controls use <param>_ctl.
+- Layout: controls above their target; signal flows top-to-bottom; audio output at the bottom.
+- Audio output scaffold: <source> -> [*~ 0.2] (varname: gain) -> [ezdac~] (varname: out), both channels.
+- Session start: if no target is set or is_agent=true, ask the user to bring their target patcher to front in Max, then call watch_for_target_patcher.
+
+Communication style: say in one short sentence what you're about to do, then do it. No preamble, no long summaries. Cite manual section filenames when query_max_docs returned them.
+"""
+
+
+def _agent_tools_from_mcp():
+    """Convert FastMCP-registered tools to the Anthropic tool schema format."""
+    tools = []
+    for tool_name, tool in getattr(mcp._tool_manager, "_tools", {}).items():
+        schema = getattr(tool, "parameters", None) or {"type": "object", "properties": {}}
+        tools.append(
+            {
+                "name": tool.name,
+                "description": (tool.description or "").strip() or tool.name,
+                "input_schema": schema,
+            }
+        )
+    return tools
+
+
+class _AgentContext:
+    """Minimal stand-in for FastMCP's Context — exposes request_context.lifespan_context['maxmsp']."""
+
+    def __init__(self, maxmsp):
+        class _Req:
+            pass
+        self.request_context = _Req()
+        self.request_context.lifespan_context = {"maxmsp": maxmsp}
+
+
+async def _dispatch_agent_tool(maxmsp, name: str, tool_input: dict):
+    tool = getattr(mcp._tool_manager, "_tools", {}).get(name)
+    if not tool:
+        return {"error": f"Unknown tool: {name}"}
+    ctx = _AgentContext(maxmsp)
+    try:
+        result = tool.fn(ctx, **(tool_input or {}))
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
+    except Exception as e:
+        logging.exception("Agent tool dispatch error")
+        return {"error": f"Tool {name} raised: {e}"}
+
+
+async def run_agent_loop(maxmsp, user_prompt: str):
+    """Run the embedded Anthropic agent loop, streaming text back to Max via Socket.IO."""
+    ns = maxmsp.namespace
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    tools = _agent_tools_from_mcp()
+    messages = [{"role": "user", "content": user_prompt}]
+
+    await maxmsp.sio.emit("agent_status", {"status": "thinking"}, namespace=ns)
+
+    try:
+        for _ in range(AGENT_MAX_ITERATIONS):
+            async with client.messages.stream(
+                model=AGENT_MODEL,
+                max_tokens=16000,
+                system=[
+                    {
+                        "type": "text",
+                        "text": AGENT_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                tools=tools,
+                messages=messages,
+                thinking={"type": "adaptive"},
+            ) as stream:
+                async for event in stream:
+                    if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                        await maxmsp.sio.emit(
+                            "agent_text",
+                            {"text": event.delta.text},
+                            namespace=ns,
+                        )
+                response = await stream.get_final_message()
+
+            messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason != "tool_use":
+                await maxmsp.sio.emit(
+                    "agent_status",
+                    {"status": "done", "stop_reason": response.stop_reason},
+                    namespace=ns,
+                )
+                return
+
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                await maxmsp.sio.emit(
+                    "agent_tool_use",
+                    {"name": block.name, "input": block.input},
+                    namespace=ns,
+                )
+                result = await _dispatch_agent_tool(maxmsp, block.name, block.input)
+                try:
+                    content = json.dumps(result, default=str) if result is not None else "ok"
+                except Exception:
+                    content = str(result)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": content,
+                    }
+                )
+            messages.append({"role": "user", "content": tool_results})
+
+        await maxmsp.sio.emit(
+            "agent_status",
+            {"status": "error", "message": f"Max iterations ({AGENT_MAX_ITERATIONS}) reached"},
+            namespace=ns,
+        )
+    except Exception as e:
+        logging.exception("Agent loop error")
+        await maxmsp.sio.emit(
+            "agent_status",
+            {"status": "error", "message": str(e)},
+            namespace=ns,
+        )
 
 
 if __name__ == "__main__":

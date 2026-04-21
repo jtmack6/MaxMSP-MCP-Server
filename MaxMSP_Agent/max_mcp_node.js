@@ -31,6 +31,13 @@ Max.addHandler("response", async (...msg) => {
 	// await Max.post(`Sent response: ${JSON.stringify(data)}`);
 });
 
+// Forward user prompts from Max to the Python agent.
+// In Max: send `prompt <your text>` to this node.script object.
+Max.addHandler("prompt", async (...msg) => {
+    var text = msg.join(" ");
+    await io.of(NAMESPACE).emit("prompt", { text: text });
+});
+
 Max.addHandler("port", async (msg) => {
   Max.post(`msg ${msg}`);
   if (msg > 0 && msg < 65536) {
@@ -53,7 +60,21 @@ io.of(NAMESPACE).on("connection", (socket) => {
   });
 
   socket.on("request", async (data) => {
-	  Max.outlet("request", JSON.stringify(data)); 
+	  Max.outlet("request", JSON.stringify(data));
+  });
+
+  // Agent-loop events streamed from the Python server back to Max.
+  // Route these to their own outlets so a Max patch can display them.
+  socket.on("agent_text", async (data) => {
+      Max.outlet("agent_text", (data && data.text) || "");
+  });
+
+  socket.on("agent_status", async (data) => {
+      Max.outlet("agent_status", JSON.stringify(data || {}));
+  });
+
+  socket.on("agent_tool_use", async (data) => {
+      Max.outlet("agent_tool_use", JSON.stringify(data || {}));
   });
 
   socket.on("port", async (data) => {

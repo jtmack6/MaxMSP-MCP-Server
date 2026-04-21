@@ -53,6 +53,51 @@ Four categories:
 
 By default all operations target the patcher containing the agent UI (`this.patcher` in `max_mcp.js`). To work on a different patch, the LLM calls `set_target_to_front_patcher` (which captures `max.frontpatcher` at that moment); operations then run on the captured patcher until it is reset via `set_target_to_agent_patcher`. The target is stored in the `target_override` module-level variable and resolved via `get_target()` on every operation.
 
+### Embedded Agent (optional)
+
+The server can also run a full Anthropic agent loop *inside itself*, so Max can be its own chat client — prompts come from a `[textedit]` in Max, responses stream back to a `[message]` or `[comment]` display. The same `@mcp.tool()`-decorated functions are reused for both the external MCP interface and the embedded agent, so there's one source of truth.
+
+**Enabling:** set `ANTHROPIC_API_KEY` (and optionally `AGENT_MODEL`, default `claude-opus-4-7`) in the MCP server env. If the key is missing, the `prompt` event returns an error status and no external MCP functionality is affected.
+
+**Flow:**
+```
+Max [textedit] -> message "prompt <text>" -> node.script
+                     |
+                     v Socket.IO event "prompt"
+                  Python (run_agent_loop)
+                     |
+     streams text deltas as "agent_text" events
+                     |
+                     v
+           node.script outlet "agent_text" -> Max display
+```
+
+**Socket.IO events (Python <-> Max):**
+- `prompt` (Max → Python): `{text: "..."}` — the user's request
+- `agent_text` (Python → Max): `{text: "..."}` — streamed text delta from Claude
+- `agent_status` (Python → Max): `{status: "thinking"|"done"|"error", ...}`
+- `agent_tool_use` (Python → Max): `{name: "...", input: {...}}` — fired when Claude calls any MCP tool
+
+When Claude uses a tool (e.g. `add_max_object`), the existing Socket.IO `command`/`request` flow kicks in, so the patch edits happen without any additional plumbing. The tool functions run in the Python process and emit commands back to Max exactly as they do when called from an external MCP client.
+
+**Max-side wiring (minimal):**
+```
+[textedit]                                        // user types here
+  |
+  [prepend prompt]                                // prefix so node.script recognizes the message
+  |
+  [node.script max_mcp_node.js]                   // same node.script as the MCP relay
+  |
+  [route agent_text agent_status agent_tool_use]  // split the outlet by tag
+  |  |  |
+  |  |  [message] / display status
+  |  [prepend set]
+  |  |
+  [message] / [comment] / [textedit]              // display streamed text
+```
+
+The agent loop lives at `server.py:run_agent_loop`. Max JS side needs no changes — everything goes through the existing node.script relay.
+
 ### Key Conventions
 
 - Objects in Max patches are identified by `varname` (scripting name). Objects prefixed `maxmcpid` are internal to the MCP agent UI and are filtered out of queries.
