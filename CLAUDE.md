@@ -59,3 +59,65 @@ By default all operations target the patcher containing the agent UI (`this.patc
 - `docs.json` is a flat JSON file keyed by Max object category, with each entry containing name, description, inlets, outlets, arguments, methods, and attributes.
 - `install.py` writes MCP server config into the client's config file (Claude Desktop, Claude Code, Cursor, or VS Code) pointing to the local `.venv`. Claude Code writes to `.mcp.json` in the project root.
 - Request timeout for round-trip queries is configurable via `SOCKETIO_TIMEOUT` env var (default 2.0s).
+
+## Generative Max Workflow
+
+When the user is building a Max patch collaboratively (not just debugging this codebase), follow this process:
+
+### Session start
+
+1. Ask the user to save their working patch to disk if it isn't already (untitled patchers can't be targeted).
+2. Call `watch_for_target_patcher` (30s timeout is a good default) and instruct the user to click inside the target patcher in Max. `max.frontpatcher` is only valid while Max has OS focus, which is why polling from inside Max is required.
+3. Confirm capture via `get_target_patcher_info` — `is_agent` should be `false` and the title should match.
+
+### Choose objects via RAG first
+
+Before building anything non-trivial, query `query_max_docs` to see how the Max manual recommends doing it. Do NOT rely on training-data knowledge of Max — the manual has specifics (inlet bindings, multichannel wrappers, signal-rate vs. message-rate distinctions) that are easy to get wrong.
+
+- "How do I X?" → `query_max_docs` (semantic search over the manual)
+- "What exactly does object Y do?" → `get_object_doc` (exact reference page)
+- Choosing between similar objects (e.g. `gate~` vs. `selector~`, `matrix~` vs. `mc.matrix~`) → `query_max_docs` to compare
+- Understanding unfamiliar concepts (MC wrapper, gen~, poly~, jit matrices) → `query_max_docs`
+
+Cite the source filename when referencing manual content so the user can dig in further.
+
+### Audio-output scaffold
+
+For patches that make sound, build this scaffold first so the user can toggle `ezdac~` once and hear every subsequent change live:
+
+```
+<generative stuff> -> [gain *~ 0.2] -> [ezdac~ (left & right)]
+```
+
+Varnames: `gain` for the `*~`, `out` for the `ezdac~`. Place them at the bottom of the patch so the generative area can grow upward.
+
+### Varname conventions
+
+Use semantic varnames so later tool calls can reference parts of the graph without re-querying. Prefer these defaults:
+
+- Oscillators: `osc1`, `osc2`, ...
+- LFOs: `lfo1`, `lfo2`, ... (usually `cycle~` at sub-audio rate or `phasor~`)
+- Filters: `filter1`, `filter2`, ... (specify type in comment if not obvious)
+- Envelopes: `env1`, ...
+- Effects: `rev` (reverb), `del` (delay), `dist` (distortion), `chorus`
+- Control: `gain`, `out`, `master_level`
+- UI inputs: `<param>_ctl` (e.g. `phase_ctl`, `freq_ctl`, `cutoff_ctl`)
+
+### Iteration loop
+
+1. User describes desired behavior in natural language ("warmer", "slow LFO on cutoff", "second voice detuned up a fifth").
+2. Query RAG for the right object(s) if the choice isn't obvious.
+3. Propose the plan in one or two sentences *before* building, so the user can redirect.
+4. Build: `add_max_object` for each new piece, then `connect_max_objects` for each wire. Connect into the existing named graph where possible (e.g. new voice → existing `gain`).
+5. Tell the user to click `ezdac~` (if off) and listen, or adjust a specific flonum/slider.
+
+### Destructive operations
+
+`remove_max_object` deletes the box and its wires but can't be undone via MCP. Before deleting more than one object or rewiring something the user likes, suggest they Cmd+S first so Max's save history holds a checkpoint. Prefer additive changes (new objects, new wires) over destructive ones.
+
+### Position & layout
+
+- Call `get_avoid_rect_position` at session start in the agent patch, skip it in user patches (returns empty when no `maxmcpid`-prefixed objects exist).
+- Space objects ~50-70 px vertically and ~80-120 px horizontally.
+- Put controls (flonums, sliders) above their target object, so signal flow reads top-to-bottom.
+- Audio output (`gain`, `ezdac~`) at the bottom.
