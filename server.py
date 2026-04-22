@@ -582,6 +582,61 @@ if OPENWEBUI_URL and OPENWEBUI_API_KEY and OPENWEBUI_MAX_COLLECTION_ID:
         return results
 
 
+@mcp.tool()
+def create_maxpat_file(
+    ctx: Context,
+    path: str,
+    boxes: list,
+    lines: list,
+    rect: list = None,
+) -> dict:
+    """Generate a complete .maxpat file from a structured spec and write it to disk.
+
+    Use this when the user wants a whole patch built from scratch (not incremental edits to
+    an open patcher). The generated file can be opened in Max via File > Open. Unlike the
+    live-edit tools (add_max_object etc.), this bypasses the MCP->Max Socket.IO plumbing
+    entirely and produces a standalone file.
+
+    Args:
+        path (str): Absolute output path, should end with .maxpat.
+        boxes (list): List of box specs. Each is a dict with keys:
+            - maxclass (str): "newobj" for most objects, or UI class like "flonum",
+              "ezdac~", "comment", "message", "button", "toggle", "dial", "slider", etc.
+            - text (str, optional): The object text, e.g. "cycle~ 440" for newobj,
+              or the comment body for comment. Omit for most UI objects.
+            - varname (str, optional): Scripting name used to reference this box in `lines`
+              and for later set_object_attribute-style calls.
+            - patching_rect (list[float], optional): [x, y, width, height]. Provide this
+              for every object unless you want Max's defaults.
+            - numinlets / numoutlets (int, optional): Override auto-inferred inlet counts.
+            - Other Max attributes can be passed as kwargs (e.g. format=6, parameter_enable=0).
+        lines (list): List of connection specs. Each is a dict with keys:
+            - src (str): Source varname (or id like "obj-1") — must match a box.
+            - dst (str): Destination varname (or id).
+            - src_outlet (int, optional): Source outlet index, default 0.
+            - dst_inlet (int, optional): Destination inlet index, default 0.
+        rect (list[float], optional): Patcher window rect [x, y, w, h].
+            Default [100, 100, 1000, 780].
+
+    Returns:
+        dict: {"path": <str>, "num_boxes": <int>, "num_lines": <int>}
+    """
+    from maxpat_builder import Patch
+
+    p = Patch(rect=tuple(rect) if rect else (100.0, 100.0, 1000.0, 780.0))
+    for b in boxes:
+        p.add(**b)
+    for line in lines:
+        p.connect(
+            src=line["src"],
+            dst=line["dst"],
+            src_outlet=int(line.get("src_outlet", 0)),
+            dst_inlet=int(line.get("dst_inlet", 0)),
+        )
+    p.save(path)
+    return {"path": path, "num_boxes": len(boxes), "num_lines": len(lines)}
+
+
 AGENT_SYSTEM_PROMPT = """You are a creative collaborator helping the user build Max/MSP patches in real-time from inside Max itself.
 
 Tools available:

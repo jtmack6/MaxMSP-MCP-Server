@@ -53,6 +53,32 @@ Four categories:
 
 By default all operations target the patcher containing the agent UI (`this.patcher` in `max_mcp.js`). To work on a different patch, the LLM calls `set_target_to_front_patcher` (which captures `max.frontpatcher` at that moment); operations then run on the captured patcher until it is reset via `set_target_to_agent_patcher`. The target is stored in the `target_override` module-level variable and resolved via `get_target()` on every operation.
 
+### File generation (`create_maxpat_file`)
+
+In addition to the live-edit tools that manipulate an open patcher via Socket.IO, the server ships a `create_maxpat_file(path, boxes, lines, rect)` MCP tool that writes a complete `.maxpat` JSON file directly to disk. Use this when the user wants a whole patch built from scratch rather than incremental edits.
+
+Implementation lives in `maxpat_builder.py`: `Patch` accumulates boxes and lines, auto-generates `obj-N` ids, infers `numinlets`/`numoutlets` via (a) a small UI lookup table, (b) `docs.json` for `newobj` types, and (c) a sensible `[2, 1]` default. Signal objects (`~` suffix) get `outlettype: ["signal", ...]` inferred. Lines that share a source outlet get the `order` field Max uses for right-to-left execution ordering.
+
+What the spec looks like (Python dict shape — same as the tool's JSON args):
+```python
+boxes = [
+    {"maxclass": "newobj", "text": "cycle~ 440", "varname": "osc1", "patching_rect": [100, 100, 100, 22]},
+    {"maxclass": "ezdac~", "varname": "out", "patching_rect": [100, 200, 45, 45]},
+]
+lines = [
+    {"src": "osc1", "dst": "out", "dst_inlet": 0},
+    {"src": "osc1", "dst": "out", "dst_inlet": 1},
+]
+```
+
+Round-trip-tested against `scratch.maxpat` — output matches byte-for-byte except for id numbering (Max's ids have gaps from object create/delete history, the builder uses sequential ids; functionally equivalent).
+
+Limitations the builder does NOT cover yet (add if you need them):
+- Subpatchers (`p` boxes containing nested `patcher` dicts)
+- Bpatchers (external `.maxpat` references)
+- Presentation mode geometry
+- Object-inspector-only attributes not caught by `**extras` kwargs
+
 ### Embedded Agent (optional)
 
 The server can also run a full Anthropic agent loop *inside itself*, so Max can be its own chat client — prompts come from a `[textedit]` in Max, responses stream back to a `[message]` or `[comment]` display. The same `@mcp.tool()`-decorated functions are reused for both the external MCP interface and the embedded agent, so there's one source of truth.
