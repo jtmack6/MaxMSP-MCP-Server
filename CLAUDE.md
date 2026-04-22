@@ -43,15 +43,16 @@ The system has three layers connected via Socket.IO:
 
 ### MCP Tools
 
-Four categories:
+Five categories (21 tools total):
 - **Action tools**: `add_max_object`, `remove_max_object`, `connect_max_objects`, `disconnect_max_objects`, `set_object_attribute`, `set_message_text`, `send_bang_to_object`, `send_messages_to_object`, `set_number` — send commands, no return value
 - **Query tools**: `get_objects_in_patch`, `get_objects_in_selected`, `get_object_attributes`, `get_avoid_rect_position`, `list_all_objects`, `get_object_doc` — return patch state or documentation
-- **Target tools**: `set_target_to_front_patcher`, `set_target_to_agent_patcher`, `get_target_patcher_info` — switch which patcher subsequent operations act on
+- **Target tools**: `watch_for_target_patcher`, `set_target_to_front_patcher`, `set_target_to_agent_patcher`, `set_target_patcher_by_name`, `get_target_patcher_info` — switch which patcher subsequent operations act on
 - **RAG tool** (optional): `query_max_docs` — semantic search over an Open WebUI knowledge base for the Max 9 User Reference. Only registered when `OPENWEBUI_URL`, `OPENWEBUI_API_KEY`, and `OPENWEBUI_MAX_COLLECTION_ID` env vars are all set. Calls `POST /api/v1/retrieval/query/collection` and returns top-k chunks with source filenames and similarity scores.
+- **File generation**: `create_maxpat_file` — writes a complete `.maxpat` file to disk from a structured spec. Detailed below.
 
 ### Patcher Targeting
 
-By default all operations target the patcher containing the agent UI (`this.patcher` in `max_mcp.js`). To work on a different patch, the LLM calls `set_target_to_front_patcher` (which captures `max.frontpatcher` at that moment); operations then run on the captured patcher until it is reset via `set_target_to_agent_patcher`. The target is stored in the `target_override` module-level variable and resolved via `get_target()` on every operation.
+By default all operations target the patcher containing the agent UI (`this.patcher` in `max_mcp.js`). The recommended way to switch target to a user patch is **`watch_for_target_patcher`**: it starts a polling Task inside Max's JS that watches `max.frontpatcher` every 100ms and captures whichever non-agent, non-Max-Console patcher the user clicks. This works because the poll fires while Max still has focus during the click. `max.frontpatcher` read from an external MCP call is unreliable — it returns null the moment Max loses OS focus, which happens whenever the user switches to the MCP client to type the next message. `set_target_patcher_by_name` exists as a fallback but depends on `max.getpatcher`, which is undefined in the legacy Max JS engine. `set_target_to_agent_patcher` resets back to the agent's own patcher.
 
 ### File generation (`create_maxpat_file`)
 

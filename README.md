@@ -2,6 +2,21 @@
 
 This project uses the [Model Context Protocol](https://modelcontextprotocol.io/introduction) (MCP) to let LLMs directly understand and generate Max patches.
 
+> **This is a fork** of [`tiianhk/MaxMSP-MCP-Server`](https://github.com/tiianhk/MaxMSP-MCP-Server) with additional features — see "What this fork adds" below.
+
+## What this fork adds
+
+- **More MCP clients supported** — Claude Desktop (upstream), plus **Claude Code** (writes `.mcp.json`), Cursor, and VS Code. Launch the server using an absolute path to the venv's `mcp` binary so clients that don't inherit a user shell (Claude Desktop on macOS) can still find it.
+- **Patcher targeting** — work on user patches, not just the agent's own patch. The robust primitive is `watch_for_target_patcher`: it polls `max.frontpatcher` from inside Max and captures whichever non-agent, non-Max-Console patcher the user clicks. Also `set_target_to_front_patcher`, `set_target_patcher_by_name`, `set_target_to_agent_patcher`, `get_target_patcher_info`.
+- **Bug fixes & resilience** — scoping fix in `server_lifespan` (`maxmsp` was only defined in one branch), deprecated `asyncio.get_event_loop()` → `get_running_loop()`, Socket.IO auto-reconnection, configurable request timeout, CORS restricted to localhost, null-checks in `connect/disconnect_objects`.
+- **Open WebUI RAG integration** — optional `query_max_docs` MCP tool does semantic search against an Open WebUI knowledge base (Max 9 User Reference + JS API + LOM + Node for Max). Gated on `OPENWEBUI_URL` / `OPENWEBUI_API_KEY` / `OPENWEBUI_MAX_COLLECTION_ID` env vars.
+- **Embedded Anthropic agent** — the server can run a full agent loop *inside itself*, letting Max be its own chat client (prompts come from a `[textedit]` in Max, responses stream back). Reuses the same `@mcp.tool()`-decorated functions as the external MCP interface. Enabled by `ANTHROPIC_API_KEY`.
+- **`.maxpat` file generator** — `maxpat_builder.py` library plus a `create_maxpat_file` MCP tool plus a standalone `maxpat_cli.py` CLI. Writes complete `.maxpat` files to disk from a structured JSON spec — bypasses the live-edit Socket.IO plumbing entirely and works even when Max isn't running. Auto-infers inlet/outlet counts from `docs.json` and a UI lookup table.
+- **Richer Max JS diagnostics** — `get_target_patcher_info` also reports `max.frontpatcher`, the agent patcher, whether the target override is null, and which `max.*` APIs are actually available in the running JS engine — all useful when debugging why targeting behaves differently than expected.
+
+See `CLAUDE.md` for architecture details and the complete tool reference.
+
+
 ### Understand: LLM Explaining a Max Patch
 
 ![img](./assets/understand.gif)
@@ -44,11 +59,17 @@ uv pip install -r requirements.txt
 ```
 4. Connect the MCP server to a MCP client (which hosts LLMs):
 ```
-# Claude:
+# Claude Desktop:
 python install.py --client claude
-# or Cursor:
+# Claude Code (writes .mcp.json in this project):
+python install.py --client claude-code
+# Cursor:
 python install.py --client cursor
+# VS Code:
+python install.py --client vscode
 ```
+If you have fork-specific env vars set in your shell when you run `install.py` (`OPENWEBUI_URL`, `OPENWEBUI_API_KEY`, `OPENWEBUI_MAX_COLLECTION_ID`, `ANTHROPIC_API_KEY`), they are propagated into the generated client config automatically.
+
 To use other clients (check the [list](https://modelcontextprotocol.io/clients)), you need to download, mannually add the configuration file path to [here](https://github.com/tiianhk/MaxMSP-MCP-Server/blob/main/install.py#L6-L13), and connect by running `python install.py --client {your_client_name}`.
 
 ### Installing to a Max patch  
