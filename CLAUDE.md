@@ -79,6 +79,20 @@ Limitations the builder does NOT cover yet (add if you need them):
 - Presentation mode geometry
 - Object-inspector-only attributes not caught by `**extras` kwargs
 
+### CLI (`maxpat_cli.py`)
+
+Standalone CLI that wraps the same builder. Handy for generating patches from shell scripts, Makefiles, watch-loops, or piping LLM output into a patch file without needing the MCP server running.
+
+```bash
+./maxpat_cli.py build spec.json                    # writes spec.maxpat alongside
+./maxpat_cli.py build spec.json -o ~/out.maxpat    # explicit output
+cat spec.json | ./maxpat_cli.py build - -o out.maxpat
+./maxpat_cli.py validate spec.json                 # parse + warn, no write
+./maxpat_cli.py validate spec.json --strict        # exit nonzero on warnings
+```
+
+Spec format is the same dict shape documented above (`rect`, `boxes`, `lines`). `validate` reports unknown-varname references in `lines` as warnings but still exits 0 unless `--strict`. Run with the project venv's Python (`./.venv/bin/python maxpat_cli.py ...`) or `chmod +x maxpat_cli.py` and use your system Python if it has access to `maxpat_builder`.
+
 ### Embedded Agent (optional)
 
 The server can also run a full Anthropic agent loop *inside itself*, so Max can be its own chat client — prompts come from a `[textedit]` in Max, responses stream back to a `[message]` or `[comment]` display. The same `@mcp.tool()`-decorated functions are reused for both the external MCP interface and the embedded agent, so there's one source of truth.
